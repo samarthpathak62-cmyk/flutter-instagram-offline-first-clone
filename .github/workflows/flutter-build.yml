@@ -76,14 +76,55 @@ jobs:
             "platforms;android-36"
 
       - name: Install dependencies
-        run: flutter pub get
+        run: |
+          flutter pub get
+          dart pub get --directory packages/env
+
+      # envied reads packages/env/.env.dev and .env.prod.
+      # Those files are gitignored, so CI must write them before build_runner.
+      - name: Write Envied .env files
+        working-directory: packages/env
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          POWERSYNC_URL: ${{ secrets.POWERSYNC_URL }}
+          FCM_SERVER_KEY: ${{ secrets.FCM_SERVER_KEY }}
+          IOS_CLIENT_ID: ${{ secrets.IOS_CLIENT_ID }}
+          WEB_CLIENT_ID: ${{ secrets.WEB_CLIENT_ID }}
+        run: |
+          # Empty GitHub secrets are "" not unset, so :- fallback is not enough.
+          supabase_url="${SUPABASE_URL:-}"
+          supabase_anon_key="${SUPABASE_ANON_KEY:-}"
+          powersync_url="${POWERSYNC_URL:-}"
+          web_client_id="${WEB_CLIENT_ID:-}"
+          [ -z "$supabase_url" ] && supabase_url="https://example.supabase.co"
+          [ -z "$supabase_anon_key" ] && supabase_anon_key="public-anon-key-placeholder"
+          [ -z "$powersync_url" ] && powersync_url="https://example.powersync.com"
+          [ -z "$web_client_id" ] && web_client_id="web-client-id-placeholder"
+
+          # Not required for Android APK. Legacy FCM key no longer exists on new Firebase projects.
+          fcm_server_key="unused-fcm-server-key"
+          ios_client_id="unused-ios-client-id"
+
+          write_env_file() {
+            cat > "$1" <<EOF
+          SUPABASE_URL=${supabase_url}
+          SUPABASE_ANON_KEY=${supabase_anon_key}
+          POWERSYNC_URL=${powersync_url}
+          FCM_SERVER_KEY=${fcm_server_key}
+          IOS_CLIENT_ID=${ios_client_id}
+          WEB_CLIENT_ID=${web_client_id}
+          EOF
+          }
+
+          write_env_file .env.dev
+          write_env_file .env.prod
+          echo "Wrote packages/env/.env.dev and packages/env/.env.prod"
 
       - name: Generate Dart files
         run: |
           dart run build_runner build --delete-conflicting-outputs || true
-          if [ -d packages/env ]; then
-            (cd packages/env && dart run build_runner build --delete-conflicting-outputs) || true
-          fi
+          (cd packages/env && dart run build_runner build)
 
       - name: Analyze Dart code
         run: flutter analyze || true
