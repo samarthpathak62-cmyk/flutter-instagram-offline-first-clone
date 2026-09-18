@@ -53,20 +53,66 @@ jobs:
           test -d android
           echo "Project structure check passed"
 
+      - name: Accept Android licenses and install NDK
+        run: |
+          set +e
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          export ANDROID_SDK_ROOT="$SDK"
+          export ANDROID_HOME="$SDK"
+
+          yes | flutter doctor --android-licenses >/dev/null 2>&1
+
+          SDKMANAGER="$(find "$SDK/cmdline-tools" "$SDK/tools/bin" -name sdkmanager -type f 2>/dev/null | head -n 1)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager not found under $SDK"
+            ls -la "$SDK" || true
+            exit 1
+          fi
+
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" --install \
+            "ndk;28.0.12433566" \
+            "build-tools;36.0.0" \
+            "platforms;android-36"
+
       - name: Install dependencies
         run: flutter pub get
 
       - name: Generate Dart files
         run: |
-          dart run build_runner build \
-            --delete-conflicting-outputs || true
+          dart run build_runner build --delete-conflicting-outputs || true
+          if [ -d packages/env ]; then
+            (cd packages/env && dart run build_runner build --delete-conflicting-outputs) || true
+          fi
 
       - name: Analyze Dart code
         run: flutter analyze || true
-  
+
       - name: Run tests
         run: flutter test
         continue-on-error: true
+
+      # Release flavor signingConfig.release needs a keystore.
+      # CI creates a throwaway keystore so assembleProductionRelease can finish.
+      - name: Create CI upload keystore
+        run: |
+          if [ ! -f android/key.properties ]; then
+            keytool -genkeypair -v \
+              -keystore android/app/ci-upload.jks \
+              -storepass android \
+              -keypass android \
+              -alias ci \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 3650 \
+              -dname "CN=CI, OU=CI, O=CI, L=CI, ST=CI, C=IN"
+            cat > android/key.properties <<'EOF'
+          storePassword=android
+          keyPassword=android
+          keyAlias=ci
+          storeFile=ci-upload.jks
+          EOF
+          fi
 
       - name: Build Production APK
         run: |
@@ -101,6 +147,7 @@ jobs:
         with:
           name: flutter-build-reports
           path: |
-            build/
-            .dart_tool/
+            build/reports/
+            build/app/outputs/mapping/
           retention-days: 7
+          if-no-files-found: ignore
